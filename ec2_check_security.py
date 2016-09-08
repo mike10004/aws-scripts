@@ -215,7 +215,7 @@ def main(argv):
                           else 1 for ev in all_evaluations])
     violation_threshold = config['violation_threshold'] or 0
     if args.verbose or num_violations > violation_threshold:
-        print >> sys.stderr, num_violations, 'violation(s)'
+        print >> sys.stderr, num_violations, 'violation(s); checked', len(regions), 'region(s)'
     if config['exit_dirty_if_violation_threshold_exceeded']:
         if num_violations > violation_threshold:
             _log.debug("%d violations exceeds threshold of %d; returning %d", 
