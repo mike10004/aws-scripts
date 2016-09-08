@@ -213,7 +213,12 @@ def main(argv):
     if args.verbose or num_violations > violation_threshold:
         print >> sys.stderr, num_violations, 'violation(s)'
     if config['exit_dirty_if_violation_threshold_exceeded']:
-        return ERR_VIOLATIONS if num_violations > violation_threshold else 0
+        if num_violations > violation_threshold:
+            _log.debug("%d violations exceeds threshold of %d; returning %d", 
+                       num_violations, violation_threshold, ERR_VIOLATIONS)
+            return ERR_VIOLATIONS
+        else:
+            return 0
     else:
         return 0
 
