@@ -113,7 +113,8 @@ def is_internal_ip(ip):
 
 def check_instances_in_region(session, config, region, verbose=False):
     ec2 = session.resource('ec2', region_name=region)
-    running = ec2.instances.filter(Filters=[{'Name': 'instance-state-name', 'Values': ['running']}])
+    running = list(ec2.instances.filter(Filters=[{'Name': 'instance-state-name', 'Values': ['running']}]))
+    _log.debug("%d instances running in %s", len(running), region)
     secgroups_by_id = {}
     for instance in running:
         for sg in instance.security_groups:
@@ -161,6 +162,9 @@ def main(argv):
     parser.add_argument("--config-file", help="set config file", metavar='FILE')
     parser.add_argument("--regions", nargs="+", help="restrict regions", metavar='REGION')
     parser.add_argument("--verbose", help="print more messages on stdout", action='store_true', default=False)
+    parser.add_argument("--aws-access-key-id", metavar="ACCESS_KEY_ID")
+    parser.add_argument("--aws-secret-access-key", metavar="SECRET_ACCESS_KEY")
+    parser.add_argument("--profile", metavar="NAME", help="AWS configuration/credentials profile to use") 
     args = parser.parse_args(argv[1:])
     logging.config.dictConfig({ 
         'version': 1,
@@ -191,7 +195,9 @@ def main(argv):
         } 
     })
     config = load_config(args.config_file)
-    session = boto3.session.Session()
+    session = boto3.session.Session(aws_access_key_id=args.aws_access_key_id, 
+                                    aws_secret_access_key=args.aws_secret_access_key,
+                                    profile_name=args.profile)
     available_regions = session.get_available_regions('ec2')
     _log.debug("user specified %d regions %s; %d available: %s", 
                len(args.regions or ()), args.regions, len(available_regions), available_regions)
