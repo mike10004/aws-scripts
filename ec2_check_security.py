@@ -37,21 +37,30 @@ class InstanceEvaluation:
 
     def __init__(self, instance, ingress_ips, max_ingress_ips):
         self.instance = instance
+        self.instance_label = self.construct_instance_label()
         self.ingress_ips = ingress_ips
         self.max_ingress_ips = max_ingress_ips
 
     def ok(self):
         return _UNRESTRICTED == self.max_ingress_ips or self.ingress_ips <= self.max_ingress_ips
 
-    def to_tuple(self, config={}):
+    def construct_instance_label(self):
+        """ Constructs a label that includes the instance name tag 
+        value and the ID, or just the ID if name tag does not exist. """
         instance_name = get_instance_tag_value(self.instance, 'Name')
         if instance_name is None:
             instance_name = self.instance.id
         else:
             instance_name = "%s (%s)" % (instance_name, self.instance.id)
+        return instance_name
+
+    def to_tuple(self, config={}):
         flag = 'OK' if self.ok() else ('IGNORED' if is_ignore_violation(config, self.instance.id) else 'VIOLATION')
         count_str = _UNRESTRICTED if self.ingress_ips >= NUM_IPV4_ADDRESSES else str(self.ingress_ips)
-        return (flag, count_str, self.max_ingress_ips, instance_name)
+        return (flag, count_str, self.max_ingress_ips, self.instance_label)
+    
+def evaluation_label_comparator(t1, t2):
+    return 0 if t1.instance_label == t2.instance_label else (-1 if t1.instance_label < t2.instance_label else 1)
 
 def get_instance_tag_value(instance, key):
     for tag in instance.tags:
@@ -153,8 +162,6 @@ def check_instances_in_region(session, config, region, verbose=False):
         _log.debug("%s: %d addresses specified by %d ip ranges", 
                    instance.id, total_ingress_ips, len(actual_ingress_ips))
         evaluations.append(InstanceEvaluation(instance, total_ingress_ips, max_ingress_ips))
-    for evaluation in evaluations:
-        print "%-9s %10s %10s %s" % evaluation.to_tuple(config)
     return evaluations
 
 def main(argv):
@@ -211,6 +218,9 @@ def main(argv):
     for region in regions:
         _log.debug("checking region %s", region)
         all_evaluations += check_instances_in_region(session, config, region, args.verbose)
+    all_evaluations.sort(cmp=evaluation_label_comparator)
+    for evaluation in all_evaluations:
+        print "%-9s %10s %10s %s" % evaluation.to_tuple(config)
     num_violations = sum([0 if (ev.ok() or is_ignore_violation(config, ev.instance.id)) 
                           else 1 for ev in all_evaluations])
     violation_threshold = config['violation_threshold'] or 0
