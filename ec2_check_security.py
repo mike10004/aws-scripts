@@ -30,23 +30,26 @@ _log = logging.getLogger(_LOGGER_NAME)
 
 _UNRESTRICTED = "unlimited"
 
-class InstanceEvaluation:
+def is_ignore_violation(config, instance_id):
+    return get_instance_criterion(config, instance_id, 'ignore_violation', False)
 
-    def ok(self):
-        return _UNRESTRICTED == self.max_ingress_ips or self.ingress_ips <= self.max_ingress_ips
+class InstanceEvaluation:
 
     def __init__(self, instance, ingress_ips, max_ingress_ips):
         self.instance = instance
         self.ingress_ips = ingress_ips
         self.max_ingress_ips = max_ingress_ips
 
-    def to_tuple(self):
+    def ok(self):
+        return _UNRESTRICTED == self.max_ingress_ips or self.ingress_ips <= self.max_ingress_ips
+
+    def to_tuple(self, config={}):
         instance_name = get_instance_tag_value(self.instance, 'Name')
         if instance_name is None:
             instance_name = self.instance.id
         else:
             instance_name = "%s (%s)" % (instance_name, self.instance.id)
-        flag = 'OK' if self.ok() else 'VIOLATION'
+        flag = 'OK' if self.ok() else ('IGNORED' if is_ignore_violation(config, self.instance.id) else 'VIOLATION')
         count_str = _UNRESTRICTED if self.ingress_ips >= NUM_IPV4_ADDRESSES else str(self.ingress_ips)
         return (flag, count_str, self.max_ingress_ips, instance_name)
 
@@ -151,7 +154,7 @@ def check_instances_in_region(session, config, region, verbose=False):
                    instance.id, total_ingress_ips, len(actual_ingress_ips))
         evaluations.append(InstanceEvaluation(instance, total_ingress_ips, max_ingress_ips))
     for evaluation in evaluations:
-        print "%-9s %10s %10s %s" % evaluation.to_tuple()
+        print "%-9s %10s %10s %s" % evaluation.to_tuple(config)
     return evaluations
 
 def main(argv):
@@ -208,7 +211,8 @@ def main(argv):
     for region in regions:
         _log.debug("checking region %s", region)
         all_evaluations += check_instances_in_region(session, config, region, args.verbose)
-    num_violations = sum([0 if ev.ok() else 1 for ev in all_evaluations])
+    num_violations = sum([0 if (ev.ok() or is_ignore_violation(config, ev.instance.id)) 
+                          else 1 for ev in all_evaluations])
     violation_threshold = config['violation_threshold'] or 0
     if args.verbose or num_violations > violation_threshold:
         print >> sys.stderr, num_violations, 'violation(s)'
