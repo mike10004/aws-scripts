@@ -16,21 +16,22 @@ import boto3
 import collections
 import ipcalc
 import logging
-import logging.config
 import json
 from StringIO import StringIO
+from myawscommon import configure_logging, add_log_level_option, add_credentials_options
 
 ERR_USAGE = 1
 ERR_VIOLATIONS = 2
 DEFAULT_MAX_INGRESS_IPS = 25
 NUM_IPV4_ADDRESSES = 4294967296
 _LOGGER_NAME = 'ec2checksec'
-
 _log = logging.getLogger(_LOGGER_NAME)
 
 _UNRESTRICTED = "unlimited"
 
 def is_ignore_violation(config, instance_id):
+    """Check the configuration to see if violations of the limits 
+       defined for this instance are to be ignored."""
     return get_instance_criterion(config, instance_id, 'ignore_violation', False)
 
 class InstanceEvaluation:
@@ -167,53 +168,18 @@ def check_instances_in_region(session, config, region, verbose=False):
 def main(argv):
     from argparse import ArgumentParser
     parser = ArgumentParser()
-    parser.add_argument("--log-level", help="set log level", metavar='LEVEL', 
-                        choices=('DEBUG', 'INFO', 'WARN', 'ERROR'), default='INFO')
+    add_log_level_option(parser)
     parser.add_argument("--config-file", help="set config file", metavar='FILE')
-    parser.add_argument("--regions", nargs="+", help="restrict regions", metavar='REGION')
     parser.add_argument("--verbose", help="print more messages on stdout", action='store_true', default=False)
-    parser.add_argument("--aws-access-key-id", metavar="ACCESS_KEY_ID")
-    parser.add_argument("--aws-secret-access-key", metavar="SECRET_ACCESS_KEY")
-    parser.add_argument("--profile", metavar="NAME", help="AWS configuration/credentials profile to use") 
+    myawscommon.add_credentials_options(parser)
+    myawscommon.add_region_option(parser)
     args = parser.parse_args(argv[1:])
-    logging.config.dictConfig({ 
-        'version': 1,
-        'disable_existing_loggers': False,
-        'formatters': { 
-            'standard': { 
-                'format': '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
-            },
-        },
-        'handlers': { 
-            'default': { 
-                'level': args.log_level,
-                'formatter': 'standard',
-                'class': 'logging.StreamHandler',
-            },
-        },
-        'loggers': { 
-            '': { 
-                'handlers': ['default'],
-                'level': 'WARN',
-                'propagate': True
-            },
-            'ec2checksec': { 
-                'handlers': ['default'],
-                'level': args.log_level,
-                'propagate': False
-            },
-        } 
-    })
+    myawscommon.configure_logging(_LOGGER_NAME, args.log_level)
     config = load_config(args.config_file)
     session = boto3.session.Session(aws_access_key_id=args.aws_access_key_id, 
                                     aws_secret_access_key=args.aws_secret_access_key,
                                     profile_name=args.profile)
-    available_regions = session.get_available_regions('ec2')
-    _log.debug("user specified %d regions %s; %d available: %s", 
-               len(args.regions or ()), args.regions, len(available_regions), available_regions)
-    regions = args.regions or available_regions
-    if not (regions <= available_regions):
-        parser.error("specified regions must be a subset of %s" % available_regions)
+    regions = myawscommon.filter_regions(session, args.regions)
     all_evaluations = []
     for region in regions:
         _log.debug("checking region %s", region)
