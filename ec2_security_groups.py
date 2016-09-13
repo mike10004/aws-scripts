@@ -152,7 +152,7 @@ def are_synchronized(security_groups, verbose=False, annotation=None):
     they contain the same set of ingress rules."""
     security_groups = list(security_groups)
     if len(security_groups) <= 1:
-        _log.info("size of security group subset is <= 1; trivially synchronized")
+        _log.info("size of security group subset {%s} is <= 1; trivially synchronized", ', '.join([sg.group_id for sg in security_groups]))
         return True
     group1 = security_groups[0]
     permset = create_comparable_ip_permissions_set(group1.ip_permissions)
@@ -169,10 +169,9 @@ def are_synchronized(security_groups, verbose=False, annotation=None):
                       (group.group_id, group.group_name), len(query_permset), 
                       (group1.group_id, group1.group_name), len(permset))
             return False
+    _log.debug("%d security groups with annotation %s are synchronized", len(security_groups), annotation)
     if verbose:
         print "confirmed synchronized:", ', '.join([sg.group_id for sg in security_groups])
-    else:
-        _log.debug("%d security groups with annotation %s are synchronized", len(security_groups), annotation)
     return True
 
 def parse_port_range(port_range_or_num):
@@ -188,7 +187,7 @@ def parse_port_range(port_range_or_num):
     from_port, to_port = port_range_or_num.split('-', maxsplit=1)
     return int(from_port), int(to_port)
 
-def act_on_rule(security_groups, cidrip, port, action, dry_run, ignore_not_found):
+def act_on_rule(security_groups, cidrip, port, action, verbose, dry_run, ignore_not_found):
     """Adds or removes a rule. Use action='authorize_ingress' to 
     add a rule; use action='revoke_ingress' to remove a rule."""
     if action not in ('authorize_ingress', 'revoke_ingress'):
@@ -207,14 +206,13 @@ def act_on_rule(security_groups, cidrip, port, action, dry_run, ignore_not_found
             num_successes += 1
         except botocore.exceptions.ClientError as e:
             error_code = e.response['Error']['Code']
-            _log.info("error_code=%s operation_name=%s", error_code, e.operation_name)
             if error_code == 'DryRunOperation':
                 num_successes += 1
             elif error_code == 'InvalidPermission.NotFound' and not ignore_not_found:
                 raise
             else:
                 raise
-        _log.debug("%s '%s' to rule of security group %s (%s)", "dry-ran" if dry_run else "executed", action, secgroup.group_name, secgroup.group_id)
+        _log.debug("%s '%s' on rule of security group %s (%s)", "dry-ran" if dry_run else "executed", action, secgroup.group_name, secgroup.group_id)
     _log.debug("%d successful actions executed on %d security groups", num_successes, len(security_groups))
     return num_successes
 
@@ -284,6 +282,8 @@ ingress rules.""")
                         "security group; this option overrides that assumption")
     parser.add_argument("--delete-unused", action="store_true", default=False, 
                         help="delete security groups that are not in use by any instances (running or stopped)")
+    parser.add_argument("--ignore-empty-target-list", action='store_true', default=False,
+                        help="do not exit dirty when an action is specified but the target list is empty")
     args = parser.parse_args(argv[1:])
     myawscommon.configure_logging(_LOGGER_NAME, args.log_level)
     session = boto3.session.Session(aws_access_key_id=args.aws_access_key_id, 
@@ -301,7 +301,9 @@ ingress rules.""")
             print_security_group if args.verbose or not _has_task_argument(args) else _NOOP, 
             args.check_in_use, args.delete_unused, args.dry_run)
         if len(security_groups) == 0:
-            _log.info("target security group list is empty")
+            _log.info("target security group list is empty (%d regions searched)", len(regions))
+            if _has_task_argument(args) and not args.ignore_empty_target_list:
+                return ERR_USAGE
         if args.check is not None:
             _log.debug("checking synchronization of security groups based on partition spec %s", args.check)
             secgroups_by_key = defaultdict(list)
@@ -321,7 +323,7 @@ ingress rules.""")
                 if not are_synchronized(expect_in_sync, verbose=args.verbose, annotation=sync_key):
                     not_in_sync.append(sync_key)
             if len(not_in_sync) > 0:
-                _log.debug("not in sync: %s", ','.join(not_in_sync))
+                _log.info("not in sync: %s", ','.join(not_in_sync))
                 return ERR_NOT_SYNCHRONIZED
         for option in ((args.add_rule, 'authorize_ingress'), (args.remove_rule, 'revoke_ingress')):
             option_value, action = option
@@ -335,9 +337,9 @@ ingress rules.""")
                     rule_specs = expand_rule_spec(unexpanded_rule_spec)
                     for rule_spec in rule_specs:
                         port, cidrip = rule_spec[0], rule_spec[1]
-                        act_on_rule(security_groups, cidrip, port, action, args.dry_run, args.ignore_rule_not_found)
+                        act_on_rule(security_groups, cidrip, port, action, args.verbose, args.dry_run, args.ignore_rule_not_found)
                         if args.verbose:
-                            print "executed", action, port, cidrip
+                            print "dry-ran" if args.dry_run else "executed", action, port, cidrip, "on", len(security_groups), "security groups"
     except UsageError as e:
         print >> sys.stderr, e
         return ERR_USAGE
