@@ -19,6 +19,7 @@ import botocore.exceptions
 from argparse import ArgumentParser
 from collections import defaultdict
 import ipcalc
+import operator
 
 _LOGGER_NAME = 'ec2secgroups'
 _log = logging.getLogger(_LOGGER_NAME)
@@ -91,8 +92,8 @@ def fetch_security_groups(session, regions, group_ids, group_names, filters, for
     regions and filtered by group IDs and other optional filters."""
     if delete_unused and not check_in_use:
         raise UsageError("--delete-unused requires --check-in-use")
-    if foreach is None:
-        foreach = lambda *a, **k: None
+    if not callable(foreach):
+        raise ValueError("'foreach' parameter must be a function")
     secgroups = []
     group_ids, group_names = group_ids or [], group_names or []
     for region in regions:
@@ -108,7 +109,7 @@ def fetch_security_groups(session, regions, group_ids, group_names, filters, for
         groups_in_use = None
         if check_in_use:
             groups_in_use = fetch_security_groups_in_use(ec2)
-        for sg in secgroups_in_region: 
+        for sg in sorted(secgroups_in_region, key=operator.attrgetter('vpc_id', 'group_name')): 
             foreach(sg, region, groups_in_use)
         if delete_unused:
             not_deleted = []
@@ -126,7 +127,10 @@ def fetch_security_groups(session, regions, group_ids, group_names, filters, for
                             raise
                 else:
                     not_deleted.append(sg)
-            _log.info("%sdeleted %d unused security groups (out of %d)", "(dry run) " if dry_run else "", len(secgroups_in_region) - len(not_deleted), len(secgroups_in_region))
+            _log.info("%sdeleted %d unused security groups (out of %d)", 
+                      "(dry run) " if dry_run else "", 
+                      len(secgroups_in_region) - len(not_deleted), 
+                      len(secgroups_in_region))
             secgroups_in_region = secgroups_in_region if dry_run else not_deleted
         _log.debug("fetched %d security group(s) in region %s", len(secgroups_in_region), region)
         secgroups += secgroups_in_region
@@ -160,9 +164,15 @@ def are_synchronized(security_groups, verbose=False, annotation=None):
                 print_ip_permissions_set(permset)
                 print >> sys.stderr, "%s (%s, %d rules)" % (group.group_name, group.group_id, len(query_permset))
                 print_ip_permissions_set(query_permset)
-            _log.info("security group %s has permissions set that has %d rules and is not equal to permissions set of security group %s with %d rules", (group.group_id, group.group_name), len(query_permset), (group1.group_id, group1.group_name), len(permset))
+            _log.info("security group %s has permissions set that has %d rules and is not " + 
+                      "equal to permissions set of security group %s with %d rules", 
+                      (group.group_id, group.group_name), len(query_permset), 
+                      (group1.group_id, group1.group_name), len(permset))
             return False
-    _log.debug("%d security groups with annotation %s are synchronized", len(security_groups), annotation)
+    if verbose:
+        print "confirmed synchronized:", ', '.join([sg.group_id for sg in security_groups])
+    else:
+        _log.debug("%d security groups with annotation %s are synchronized", len(security_groups), annotation)
     return True
 
 def parse_port_range(port_range_or_num):
@@ -181,11 +191,14 @@ def parse_port_range(port_range_or_num):
 def act_on_rule(security_groups, cidrip, port, action, dry_run, ignore_not_found):
     """Adds or removes a rule. Use action='authorize_ingress' to 
     add a rule; use action='revoke_ingress' to remove a rule."""
+    if action not in ('authorize_ingress', 'revoke_ingress'):
+        raise ValueError("invalid action: " + action)
     if '/' not in cidrip:
         raise UsageError('CIDR does not specify subnet; use /32 to restrict to only the explicit IP address')
     cidrip_obj = ipcalc.Network(cidrip)
     from_port, to_port = parse_port_range(port)
-    _log.debug("executing %s to %d security groups allowing TCP traffic on port(s) %d-%d from %d addresses (%s)", action, len(security_groups), from_port, to_port, cidrip_obj.size(), cidrip)
+    _log.debug("executing %s to %d security groups allowing TCP traffic on port(s) %d-%d from %d addresses (%s)", 
+               action, len(security_groups), from_port, to_port, cidrip_obj.size(), cidrip)
     num_successes = 0
     for secgroup in security_groups:
         try:
@@ -235,9 +248,12 @@ def _get_task_argument_values(args):
 def _has_task_argument(args):
     return len(_get_task_argument_values(args)) > 0
 
+def _NOOP(*args, **kwargs):
+    pass
+
 def main(argv):
-    parser = ArgumentParser(description=
-"""Perform operations on security groups. Prints security groups, 
+    parser = ArgumentParser(description="""\
+Perform operations on security groups. Prints security groups, 
 checks that they have identical ingress rules, and adds or removes 
 ingress rules.""")
     myawscommon.add_log_level_option(parser)
@@ -247,14 +263,27 @@ ingress rules.""")
     parser.add_argument("--group-names", nargs="+", help="filter target groups by group name", metavar="NAME")
     parser.add_argument("--tag", metavar="NAME=VALUE", help="filter target groups by tag value")
     parser.add_argument("--verbose", help="print more messages on stdout", action='store_true', default=False)
-    parser.add_argument("--check-in-use", help="check whether security groups are in use (and mark those not in use with * in list)", action='store_true', default=False)
-    parser.add_argument("--dry-run", action='store_true', help="set DryRun flag to true for actions that would modify security groups", default=False)
-    parser.add_argument("--check", nargs="?", help="checks that security group subsets contain the same set of ingress IP permission rules; security groups can be partitioned into subsets based on the value of the tag specified", metavar="TAGNAME", const='ALL')
-    parser.add_argument("--add-rule", nargs=2, action='append', metavar="ARG", help="for each security group, adds a rule (formatted as two args, PORT SPEC) allowing ingress via TCP on port PORT from IP addresses within the range CIDR; e.g. --add-rule 8080 10.0.0.0/16")
-    parser.add_argument("--remove-rule", nargs=2, action='append', metavar="ARG", help="each security group, removes the rule (formatted as two args, PORT SPEC) that allows ingress via TCP on port PORT from IP addresses within the range CIDR")
-    parser.add_argument("--ignore-rule-not-found", action="store_true", help="with --remove-rule, ignore errors that are due to absence of the specified rule in any security group", default=False)
-    parser.add_argument("--allow-action-on-all", action='store_true', help="allows --add-rule or --remove-rule to operate on all security groups; by default, as a precaution, it is assumed that the user erred in requesting a rule be added to every security group; this option overrides that assumption", default=False)
-    parser.add_argument("--delete-unused", action="store_true", help="delete security groups that are not in use by any instances (running or stopped)", default=False)
+    parser.add_argument("--check-in-use", action='store_true', default=False, 
+                        help="check whether security groups are in use (and mark those not in use with * in list)")
+    parser.add_argument("--dry-run", action='store_true', default=False, 
+                        help="set DryRun flag to true for actions that would modify security groups")
+    parser.add_argument("--check", nargs="?", metavar="TAGNAME", const='ALL', 
+                        help="checks that security group subsets contain the same set of ingress IP permission rules; " + 
+                        "security groups can be partitioned into subsets based on the value of the tag specified")
+    parser.add_argument("--add-rule", nargs=2, action='append', metavar="ARG", 
+                        help="for each security group, adds a rule (formatted as two args, PORT SPEC) allowing ingress " + 
+                        "via TCP on port PORT from IP addresses within the range CIDR; e.g. --add-rule 8080 10.0.0.0/16")
+    parser.add_argument("--remove-rule", nargs=2, action='append', metavar="ARG", 
+                        help="each security group, removes the rule (formatted as two args, PORT SPEC) that allows " + 
+                        "ingress via TCP on port PORT from IP addresses within the range CIDR")
+    parser.add_argument("--ignore-rule-not-found", action="store_true", default=False, 
+                        help="with --remove-rule, ignore errors that are due to absence of the specified rule in any security group")
+    parser.add_argument("--allow-action-on-all", action='store_true', default=False, 
+                        help="allows --add-rule or --remove-rule to operate on all security groups; by default, as " + 
+                        "a precaution, it is assumed that the user erred in requesting a rule be added to every " + 
+                        "security group; this option overrides that assumption")
+    parser.add_argument("--delete-unused", action="store_true", default=False, 
+                        help="delete security groups that are not in use by any instances (running or stopped)")
     args = parser.parse_args(argv[1:])
     myawscommon.configure_logging(_LOGGER_NAME, args.log_level)
     session = boto3.session.Session(aws_access_key_id=args.aws_access_key_id, 
@@ -262,14 +291,15 @@ ingress rules.""")
                                     profile_name=args.profile)
     try:
         regions = myawscommon.filter_regions(session, args.regions)
-        _log.debug("regions filtered to %s according to user specification %s; tasks: %s", regions, args.regions, _get_task_argument_values(args))
+        _log.debug("regions filtered to %s according to user specification %s; tasks: %s", 
+                   regions, args.regions, _get_task_argument_values(args))
         filters = []
         if args.tag:
             filters.append(parse_tag_filter(args.tag))
-        security_groups = fetch_security_groups(session, regions, 
-                args.group_ids, args.group_names, filters, 
-                print_security_group if args.verbose or not _has_task_argument(args) else None, 
-                args.check_in_use, args.delete_unused, args.dry_run)
+        security_groups = fetch_security_groups(
+            session, regions, args.group_ids, args.group_names, filters, 
+            print_security_group if args.verbose or not _has_task_argument(args) else _NOOP, 
+            args.check_in_use, args.delete_unused, args.dry_run)
         if len(security_groups) == 0:
             _log.info("target security group list is empty")
         if args.check is not None:
@@ -298,7 +328,9 @@ ingress rules.""")
             if option_value is not None:
                 for unexpanded_rule_spec in option_value:
                     if not is_any_restriction_specified(args):
-                        _log.error("denying request to add or remove rule to/from all security groups; use --group-ids, --group-names, or --tag to restrict the security groups list, or use --allow-action-on-all to override this check")
+                        _log.error("denying request to add or remove rule to/from all security groups; " + 
+                                   "use --group-ids, --group-names, or --tag to restrict the security " + 
+                                   "groups list, or use --allow-action-on-all to override this check")
                         return ERR_UNRESTRICTED_RULE_APPLICATION_REQUESTED
                     rule_specs = expand_rule_spec(unexpanded_rule_spec)
                     for rule_spec in rule_specs:
