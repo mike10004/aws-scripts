@@ -18,7 +18,7 @@ import ipcalc
 import logging
 import json
 from StringIO import StringIO
-from myawscommon import configure_logging, add_log_level_option, add_credentials_options
+import myawscommon
 
 ERR_USAGE = 1
 ERR_VIOLATIONS = 2
@@ -168,7 +168,7 @@ def check_instances_in_region(session, config, region, verbose=False):
 def main(argv):
     from argparse import ArgumentParser
     parser = ArgumentParser()
-    add_log_level_option(parser)
+    myawscommon.add_log_level_option(parser)
     parser.add_argument("--config-file", help="set config file", metavar='FILE')
     parser.add_argument("--verbose", help="print more messages on stdout", action='store_true', default=False)
     myawscommon.add_credentials_options(parser)
