@@ -36,4 +36,4 @@ For each script, execute
 
     $ ./ec2_script_name.py --help
 
-to print a help message describe how to use it.
+to print a help message describing how to use it.
