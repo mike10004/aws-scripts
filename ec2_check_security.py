@@ -98,7 +98,7 @@ A configuration might look like this:
 }
 
 Remember to follow JSON syntax, not Python syntax for dicts. For 
-example, make sure to use "false" instead of "False".
+example, make sure to use `false` instead of `False`.
     """
     d = {}
     if config_pathname is not None:
@@ -124,12 +124,12 @@ def is_internal_ip(ip):
         return int(ip.mask) > 0
     return False
 
-def check_instances_in_region(session, config, region, verbose=False):
+def check_instances_in_region(session, config, region, states, verbose=False):
     ec2 = session.resource('ec2', region_name=region)
-    running = list(ec2.instances.filter(Filters=[{'Name': 'instance-state-name', 'Values': ['running']}]))
-    _log.debug("%d instances running in %s", len(running), region)
+    instances = list(ec2.instances.filter(Filters=[{'Name': 'instance-state-name', 'Values': states}]))
+    _log.debug("%d instances with state in %s in region %s", len(instances), states, region)
     secgroups_by_id = {}
-    for instance in running:
+    for instance in instances:
         for sg in instance.security_groups:
             if sg['GroupId'] not in secgroups_by_id:
                 sg = ec2.SecurityGroup(sg['GroupId'])
@@ -138,7 +138,7 @@ def check_instances_in_region(session, config, region, verbose=False):
     evaluations = []
     size_calced = set()
     default_max_ingress_ips = config['default_max_ingress_ips'] or DEFAULT_MAX_INGRESS_IPS
-    for instance in running:
+    for instance in instances:
         max_ingress_ips = get_instance_criterion(config, instance.id, 'max_ingress_ips', default_max_ingress_ips)
         ignore_internal_ips = get_instance_criterion(config, instance.id, 'ignore_internal_ips', False)
         actual_ingress_ips = []
@@ -167,12 +167,21 @@ def check_instances_in_region(session, config, region, verbose=False):
 
 def main(argv):
     from argparse import ArgumentParser
-    parser = ArgumentParser()
+    parser = ArgumentParser(description="""\
+Check that the security groups of your EC2 instances have the proper
+ingress restrictions configured.
+
+This script looks at the ingress rules of the security groups on your
+instances and compares the number of IP addresses implied by the rules
+to limits you define in a configuration file. """)
     myawscommon.add_log_level_option(parser)
     parser.add_argument("--config-file", help="set config file", metavar='FILE')
     parser.add_argument("--verbose", help="print more messages on stdout", action='store_true', default=False)
     myawscommon.add_credentials_options(parser)
     myawscommon.add_region_option(parser)
+    parser.add_argument("--instance-states", nargs='+', default=('running',), metavar="STATE", 
+                        help="check instances in these states; 'running' and 'stopped' are " + 
+                        "the only valid choices; default is 'running' only")
     args = parser.parse_args(argv[1:])
     myawscommon.configure_logging(_LOGGER_NAME, args.log_level)
     config = load_config(args.config_file)
@@ -183,7 +192,7 @@ def main(argv):
     all_evaluations = []
     for region in regions:
         _log.debug("checking region %s", region)
-        all_evaluations += check_instances_in_region(session, config, region, args.verbose)
+        all_evaluations += check_instances_in_region(session, config, region, args.instance_states, args.verbose)
     all_evaluations.sort(cmp=evaluation_label_comparator)
     for evaluation in all_evaluations:
         print "%-9s %10s %10s %s" % evaluation.to_tuple(config)
