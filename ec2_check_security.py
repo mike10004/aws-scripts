@@ -19,6 +19,8 @@ import logging
 import json
 from StringIO import StringIO
 import myawscommon
+import dateparser
+import datetime
 
 ERR_USAGE = 1
 ERR_VIOLATIONS = 2
@@ -29,10 +31,35 @@ _log = logging.getLogger(_LOGGER_NAME)
 
 _UNRESTRICTED = "unlimited"
 
+def get_instance_criterion(config, instance_id, key, default_value=None):
+    if 'instance_criteria' in config:
+        for instance in config['instance_criteria']:
+            if instance_id == instance['id']:
+                try:
+                    return instance[key]
+                except KeyError:
+                    return default_value
+    return default_value
+
 def is_ignore_violation(config, instance_id):
     """Check the configuration to see if violations of the limits 
        defined for this instance are to be ignored."""
     return get_instance_criterion(config, instance_id, 'ignore_violation', False)
+
+def is_suspended(config, instance_id):
+    """Check the configuration to see if the limits defined are 
+    temporarily suspended."""
+    suspensions = get_instance_criterion(config, instance_id, 'suspensions', default_value=[])
+    now = datetime.datetime.now()
+    for bounds in suspensions:
+        try:
+            earliest = dateparser.parse('1996-08-29T02:14:00-04:00' if bounds['from'] == '*' else bounds['from'])
+            latest = dateparser.parse('2038-01-19T03:14:07' if bounds['to'] == '*' else bounds['to'])
+        except KeyError:
+            raise UsageError("suspensions objects in config must have 'from' and 'to' fields")
+        if now >= earliest and now <= latest:
+            return True
+    return False
 
 class InstanceEvaluation:
 
@@ -56,7 +83,14 @@ class InstanceEvaluation:
         return instance_name
 
     def to_tuple(self, config={}):
-        flag = 'OK' if self.ok() else ('IGNORED' if is_ignore_violation(config, self.instance.id) else 'VIOLATION')
+        if self.ok():
+            flag = 'OK'
+        elif is_ignore_violation(config, self.instance.id):
+            flag = 'IGNORED'
+        elif is_suspended(config, self.instance.id):
+            flag = 'SUSPENDED'
+        else:
+            flag = 'VIOLATION'
         count_str = _UNRESTRICTED if self.ingress_ips >= NUM_IPV4_ADDRESSES else str(self.ingress_ips)
         return (flag, count_str, self.max_ingress_ips, self.instance_label)
     
@@ -93,6 +127,18 @@ A configuration might look like this:
       "id": "i-deadbeef",
       "max_ingress_ips": 4300000000,
       "ignore_internal_ips": false
+    },
+    {
+      "id": "i-cabb1e5",
+      "max_ingress_ips": 4300000000,
+      "ignore_violation": true
+    },
+    {
+      "id": "i-0bad1dea",
+      "max_ingress_ips": 500,
+      "suspensions": [
+        {"from": "2016-10-01T00:00:00-04:00", "to": "2016-10-31T23:59:00-04:00"}
+      ]
     }
   ]
 }
@@ -107,16 +153,6 @@ example, make sure to use `false` instead of `False`.
     cfg = collections.defaultdict(lambda: None)
     cfg.update(d)
     return cfg
-
-def get_instance_criterion(config, instance_id, key, default_value=None):
-    if 'instance_criteria' in config:
-        for instance in config['instance_criteria']:
-            if instance_id == instance['id']:
-                try:
-                    return instance[key]
-                except KeyError:
-                    return default_value
-    return default_value
 
 def is_internal_ip(ip):
     nw = ip.network()
