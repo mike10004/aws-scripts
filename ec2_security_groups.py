@@ -20,6 +20,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 import ipcalc
 import operator
+from myawscommon import UsageError
 
 _LOGGER_NAME = 'ec2secgroups'
 _log = logging.getLogger(_LOGGER_NAME)
@@ -27,29 +28,37 @@ ERR_UNRESTRICTED_RULE_APPLICATION_REQUESTED = 3
 ERR_NOT_SYNCHRONIZED = 2
 ERR_USAGE = 1
 
-class UsageError(ValueError):
-    pass
-
 def format_port_range(from_port, to_port):
     if from_port is None and to_port is None:
         raise ValueError("at least one port must be not-None")
+    if (from_port == -1 and to_port == -1) or ((from_port == 0 or from_port == 1) and to_port == 65535):
+        return "any"
     if from_port == to_port:
         return str(from_port)
     return "%s-%s" % (from_port, to_port)
 
 def print_ip_permissions_set(ip_permissions_set, ofile=sys.stdout):
+    _log.debug("print: %s", ip_permissions_set)
     ip_permissions_set = list(ip_permissions_set)
     for i in xrange(len(ip_permissions_set)):
         rule = ip_permissions_set[i]
+        protocol = rule[3]
         ip_ranges = rule[2]
-        for ip_range in ip_ranges:
-            print >> ofile, "%2d: %11s %s" % (i, format_port_range(rule[0], rule[1]), ip_range)
+        if len(ip_ranges) > 0:
+            for ip_range in ip_ranges:
+                print >> ofile, "%2d: %11s %18s %s" % (i, format_port_range(rule[0], rule[1]), ip_range, protocol)
+        else:
+            print >> ofile, "%2d: %11s %18s %s" % (i, format_port_range(rule[0], rule[1]), '0.0.0.0/0', protocol)
 
-def create_comparable_ip_permission(ip_permission):
-    if 'UserIdGroupPairs' in ip_permission and len(ip_permission['UserIdGroupPairs']) > 0:
-        raise ValueError("cannot create comparable IP permission object if 'UserIdGroupPairs' is nonempty")
-    if 'PrefixListIds' in ip_permission and len(ip_permission['PrefixListIds']) > 0:
-        raise ValueError("cannot create comparable IP permission object if 'PrefixListIds' is nonempty")
+def _dict_to_set_of_tuples(d):
+    return frozenset([(k, d[k]) for k in d])
+
+def create_comparable_ip_permission(ip_permission, sg_id=None, sg_name=None):
+    prefix_list_ids = frozenset()
+    if 'PrefixListIds' in ip_permission:
+        # I've never seen one of these, but I assume this is a list of strings
+        prefix_list_ids = frozenset(ip_permission['PrefixListIds'])
+    protocol = ip_permission['IpProtocol']
     from_port, to_port = None, None
     try:
         from_port = ip_permission['FromPort']
@@ -60,12 +69,12 @@ def create_comparable_ip_permission(ip_permission):
     except KeyError:
         pass
     ip_ranges = frozenset([ip_range['CidrIp'] for ip_range in ip_permission['IpRanges']])
-    return (from_port, to_port, ip_ranges)
+    return (from_port, to_port, ip_ranges, protocol, prefix_list_ids)
 
-def create_comparable_ip_permissions_set(ip_permissions):
+def create_comparable_ip_permissions_set(ip_permissions, sg_id=None, sg_name=None):
     """Creates a set that represents a list of IP permissions
        and is comparable using the == operator."""
-    return frozenset([create_comparable_ip_permission(ip_permission) for ip_permission in ip_permissions])
+    return frozenset([create_comparable_ip_permission(ip_permission, sg_id) for ip_permission in ip_permissions])
 
 def print_security_group(sg, region, groups_in_use=None):
     not_in_use_marker = ' '
@@ -104,6 +113,9 @@ def fetch_security_groups(session, regions, group_ids, group_names, filters, for
             error_code = e.response['Error']['Code']
             if error_code == 'InvalidGroup.NotFound':
                 secgroups_in_region = []
+            elif error_code == 'InvalidParameterValue' and 'You may not reference Amazon VPC security groups by name.' in str(e):
+                _log.info("adjusting fetch strategy for inconsistent server behavior ('%s' client error)", error_code)
+                secgroups_in_region = [sg for sg in ec2.security_groups.filter(GroupIds=group_ids, GroupNames=[], Filters=filters) if sg.group_name in group_names]
             else:
                 raise
         groups_in_use = None
@@ -134,6 +146,9 @@ def fetch_security_groups(session, regions, group_ids, group_names, filters, for
             secgroups_in_region = secgroups_in_region if dry_run else not_deleted
         _log.debug("fetched %d security group(s) in region %s", len(secgroups_in_region), region)
         secgroups += secgroups_in_region
+        if len(group_ids) > 0 and (len(secgroups) >= len(group_ids)):
+            _log.debug("already found %d security groups, and %d group IDs were specified; not searching any more regions", len(secgroups), len(group_ids))
+            break
     return secgroups
 
 def parse_tag_filter(tagspec):
@@ -155,19 +170,18 @@ def are_synchronized(security_groups, verbose=False, annotation=None):
         _log.info("size of security group subset {%s} is <= 1; trivially synchronized", ', '.join([sg.group_id for sg in security_groups]))
         return True
     group1 = security_groups[0]
-    permset = create_comparable_ip_permissions_set(group1.ip_permissions)
+    permset = create_comparable_ip_permissions_set(group1.ip_permissions, group1.group_id, group1.group_name)
     for group in security_groups[1:]:
-        query_permset = create_comparable_ip_permissions_set(group.ip_permissions)
+        query_permset = create_comparable_ip_permissions_set(group.ip_permissions, group.group_id, group.group_name)
         if permset != query_permset:
             if verbose:
                 print >> sys.stderr, "%s (%s, %d rules)" % (group1.group_name, group1.group_id, len(permset))
                 print_ip_permissions_set(permset)
                 print >> sys.stderr, "%s (%s, %d rules)" % (group.group_name, group.group_id, len(query_permset))
                 print_ip_permissions_set(query_permset)
-            _log.info("security group %s has permissions set that has %d rules and is not " + 
-                      "equal to permissions set of security group %s with %d rules", 
-                      (group.group_id, group.group_name), len(query_permset), 
-                      (group1.group_id, group1.group_name), len(permset))
+            _log.debug("security group %s=%s is not equal to %s=%s", 
+                      (group.group_id, group.group_name), query_permset, 
+                      (group1.group_id, group1.group_name), permset)
             return False
     _log.debug("%d security groups with annotation %s are synchronized", len(security_groups), annotation)
     if verbose:
@@ -251,8 +265,8 @@ def _NOOP(*args, **kwargs):
 
 def main(argv):
     parser = ArgumentParser(description="""\
-Perform operations on security groups. Prints security groups, 
-checks that they have identical ingress rules, and adds or removes 
+Perform operations on security groups. Print security groups, 
+check that they have identical ingress rules, and add/remove
 ingress rules.""")
     myawscommon.add_log_level_option(parser)
     myawscommon.add_credentials_options(parser)

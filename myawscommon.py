@@ -11,6 +11,16 @@
 import logging, logging.config
 import fnmatch
 
+class UsageError(ValueError):
+    pass
+
+def client_error_has_code(e, code_or_codes):
+    codes = code_or_codes
+    if isinstance(code_or_codes, basestring):
+        codes = (code_or_codes,)
+    error_code = e.response['Error']['Code']
+    return error_code in codes
+
 def abbreviate(data, n, sub='...'):
     sub = sub or ''
     trunc_len = n - len(sub)
