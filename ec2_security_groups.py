@@ -9,6 +9,8 @@
 #
 #  Script that provides a method to synchronize updates to multiple 
 #  security groups across VPCs.
+#
+#  Dependencies: boto3, ipcalc (available via pip)
 
 import logging
 import myawscommon

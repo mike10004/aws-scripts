@@ -9,7 +9,7 @@
 #
 #  Script that runs some security checks on AWS EC2 instances.
 #  
-#  Dependencies: boto3, ipcalc (both available via pip)
+#  Dependencies: boto3, ipcalc, dateparser (available via pip)
 
 import sys
 import boto3
