@@ -232,7 +232,7 @@ to limits you define in a configuration file. """)
     all_evaluations.sort(cmp=evaluation_label_comparator)
     for evaluation in all_evaluations:
         print "%-9s %10s %10s %s" % evaluation.to_tuple(config)
-    num_violations = sum([0 if (ev.ok() or is_ignore_violation(config, ev.instance.id)) 
+    num_violations = sum([0 if (ev.ok() or is_ignore_violation(config, ev.instance.id) or is_suspended(config, ev.instance.id)) 
                           else 1 for ev in all_evaluations])
     violation_threshold = config['violation_threshold'] or 0
     if args.verbose or num_violations > violation_threshold:
