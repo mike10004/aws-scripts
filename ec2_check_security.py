@@ -228,6 +228,8 @@ to limits you define in a configuration file. """)
     session = boto3.session.Session(aws_access_key_id=args.aws_access_key_id, 
                                     aws_secret_access_key=args.aws_secret_access_key,
                                     profile_name=args.profile)
+    credentials = session.get_credentials()
+    _log.debug("using access key id %s with %s secret key", credentials.access_key, 'present' if credentials.secret_key else 'absent')
     regions = myawscommon.filter_regions(session, args.regions)
     all_evaluations = []
     for region in regions:
