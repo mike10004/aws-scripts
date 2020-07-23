@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+#
 # -*- coding: utf-8 -*-
 #
 #  ec2_check_security.py
@@ -10,17 +11,18 @@
 #  Script that runs some security checks on AWS EC2 instances.
 #  
 #  Dependencies: boto3, ipcalc, dateparser (available via pip)
-
+import functools
 import sys
 import boto3
 import collections
 import ipcalc
 import logging
 import json
-from StringIO import StringIO
 import myawscommon
 import dateparser
 import datetime
+from myawscommon import UsageError
+
 
 ERR_USAGE = 1
 ERR_VIOLATIONS = 2
@@ -82,7 +84,9 @@ class InstanceEvaluation:
             instance_name = "%s (%s)" % (instance_name, self.instance.id)
         return instance_name
 
-    def to_tuple(self, config={}):
+    def to_tuple(self, config=None):
+        if config is None:
+            config = {}
         if self.ok():
             flag = 'OK'
         elif is_ignore_violation(config, self.instance.id):
@@ -92,7 +96,7 @@ class InstanceEvaluation:
         else:
             flag = 'VIOLATION'
         count_str = _UNRESTRICTED if self.ingress_ips >= NUM_IPV4_ADDRESSES else str(self.ingress_ips)
-        return (flag, count_str, self.max_ingress_ips, self.instance_label)
+        return flag, count_str, self.max_ingress_ips, self.instance_label
     
 def evaluation_label_comparator(t1, t2):
     return 0 if t1.instance_label == t2.instance_label else (-1 if t1.instance_label < t2.instance_label else 1)
@@ -229,14 +233,14 @@ to limits you define in a configuration file. """)
     for region in regions:
         _log.debug("checking region %s", region)
         all_evaluations += check_instances_in_region(session, config, region, args.instance_states, args.verbose)
-    all_evaluations.sort(cmp=evaluation_label_comparator)
+    all_evaluations.sort(key=functools.cmp_to_key(evaluation_label_comparator))
     for evaluation in all_evaluations:
-        print "%-9s %10s %10s %s" % evaluation.to_tuple(config)
+        print("%-9s %10s %10s %s" % evaluation.to_tuple(config))
     num_violations = sum([0 if (ev.ok() or is_ignore_violation(config, ev.instance.id) or is_suspended(config, ev.instance.id)) 
                           else 1 for ev in all_evaluations])
     violation_threshold = config['violation_threshold'] or 0
     if args.verbose or num_violations > violation_threshold:
-        print >> sys.stderr, num_violations, 'violation(s); checked', len(regions), 'region(s)'
+        print(num_violations, 'violation(s); checked', len(regions), 'region(s)', file=sys.stderr)
     if config['exit_dirty_if_violation_threshold_exceeded']:
         if num_violations > violation_threshold:
             _log.debug("%d violations exceeds threshold of %d; returning %d", 

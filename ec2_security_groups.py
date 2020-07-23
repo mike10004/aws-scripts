@@ -42,19 +42,21 @@ def format_port_range(from_port, to_port):
 def print_ip_permissions_set(ip_permissions_set, ofile=sys.stdout):
     _log.debug("print: %s", ip_permissions_set)
     ip_permissions_set = list(ip_permissions_set)
-    for i in xrange(len(ip_permissions_set)):
+    for i in range(len(ip_permissions_set)):
         rule = ip_permissions_set[i]
         protocol = rule[3]
         ip_ranges = rule[2]
         if len(ip_ranges) > 0:
             for ip_range in ip_ranges:
-                print >> ofile, "%2d: %11s %18s %s" % (i, format_port_range(rule[0], rule[1]), ip_range, protocol)
+                print("%2d: %11s %18s %s" % (i, format_port_range(rule[0], rule[1]), ip_range, protocol), file=ofile)
         else:
-            print >> ofile, "%2d: %11s %18s %s" % (i, format_port_range(rule[0], rule[1]), '0.0.0.0/0', protocol)
+            print("%2d: %11s %18s %s" % (i, format_port_range(rule[0], rule[1]), '0.0.0.0/0', protocol), file=ofile)
 
 def _dict_to_set_of_tuples(d):
     return frozenset([(k, d[k]) for k in d])
 
+
+# noinspection PyUnusedLocal
 def create_comparable_ip_permission(ip_permission, sg_id=None, sg_name=None):
     prefix_list_ids = frozenset()
     if 'PrefixListIds' in ip_permission:
@@ -71,8 +73,10 @@ def create_comparable_ip_permission(ip_permission, sg_id=None, sg_name=None):
     except KeyError:
         pass
     ip_ranges = frozenset([ip_range['CidrIp'] for ip_range in ip_permission['IpRanges']])
-    return (from_port, to_port, ip_ranges, protocol, prefix_list_ids)
+    return from_port, to_port, ip_ranges, protocol, prefix_list_ids
 
+
+# noinspection PyUnusedLocal
 def create_comparable_ip_permissions_set(ip_permissions, sg_id=None, sg_name=None):
     """Creates a set that represents a list of IP permissions
        and is comparable using the == operator."""
@@ -86,7 +90,7 @@ def print_security_group(sg, region, groups_in_use=None):
         elif sg.group_id not in groups_in_use:
             not_in_use_marker = '*'
     importants = (region, sg.vpc_id, abbreviate(sg.group_name, 20), not_in_use_marker, sg.group_id)
-    print "%-16s %-16s %-20s %1s%-12s" % importants
+    print("%-16s %-16s %-20s %1s%-12s" % importants)
 
 def fetch_security_groups_in_use(ec2):
     groups_in_use = set()
@@ -136,7 +140,7 @@ def fetch_security_groups(session, regions, group_ids, group_names, filters, for
                         if error_code == 'DryRunOperation':
                             _log.debug("error_code=%s operation_name=%s", error_code, e.operation_name)
                         elif error_code == 'DependencyViolation':
-                            _log.warn("failed to delete %s (%s) due to dependency violation", sg.group_id, sg.group_name)
+                            _log.warning("failed to delete %s (%s) due to dependency violation", sg.group_id, sg.group_name)
                         else:
                             raise
                 else:
@@ -177,9 +181,9 @@ def are_synchronized(security_groups, verbose=False, annotation=None):
         query_permset = create_comparable_ip_permissions_set(group.ip_permissions, group.group_id, group.group_name)
         if permset != query_permset:
             if verbose:
-                print >> sys.stderr, "%s (%s, %d rules)" % (group1.group_name, group1.group_id, len(permset))
+                print("%s (%s, %d rules)" % (group1.group_name, group1.group_id, len(permset)), file=sys.stderr)
                 print_ip_permissions_set(permset)
-                print >> sys.stderr, "%s (%s, %d rules)" % (group.group_name, group.group_id, len(query_permset))
+                print("%s (%s, %d rules)" % (group.group_name, group.group_id, len(query_permset)), file=sys.stderr)
                 print_ip_permissions_set(query_permset)
             _log.debug("security group %s=%s is not equal to %s=%s", 
                       (group.group_id, group.group_name), query_permset, 
@@ -187,7 +191,7 @@ def are_synchronized(security_groups, verbose=False, annotation=None):
             return False
     _log.debug("%d security groups with annotation %s are synchronized", len(security_groups), annotation)
     if verbose:
-        print "confirmed synchronized:", ', '.join([sg.group_id for sg in security_groups])
+        print("confirmed synchronized:", ', '.join([sg.group_id for sg in security_groups]))
     return True
 
 def parse_port_range(port_range_or_num):
@@ -203,6 +207,8 @@ def parse_port_range(port_range_or_num):
     from_port, to_port = port_range_or_num.split('-', maxsplit=1)
     return int(from_port), int(to_port)
 
+
+# noinspection PyUnusedLocal
 def act_on_rule(security_groups, cidrip, port, action, verbose, dry_run, ignore_not_found):
     """Adds or removes a rule. Use action='authorize_ingress' to 
     add a rule; use action='revoke_ingress' to remove a rule."""
@@ -262,6 +268,8 @@ def _get_task_argument_values(args):
 def _has_task_argument(args):
     return len(_get_task_argument_values(args)) > 0
 
+
+# noinspection PyPep8Naming,PyUnusedLocal
 def _NOOP(*args, **kwargs):
     pass
 
@@ -355,9 +363,9 @@ ingress rules.""")
                         port, cidrip = rule_spec[0], rule_spec[1]
                         act_on_rule(security_groups, cidrip, port, action, args.verbose, args.dry_run, args.ignore_rule_not_found)
                         if args.verbose:
-                            print "dry-ran" if args.dry_run else "executed", action, port, cidrip, "on", len(security_groups), "security groups"
+                            print("dry-ran" if args.dry_run else "executed", action, port, cidrip, "on", len(security_groups), "security groups")
     except UsageError as e:
-        print >> sys.stderr, e
+        print(e, file=sys.stderr)
         return ERR_USAGE
     return 0
 

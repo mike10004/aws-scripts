@@ -1,0 +1,4 @@
+boto3~=1.14.26
+ipcalc~=1.99.0
+dateparser~=0.7.6
+botocore~=1.17.26

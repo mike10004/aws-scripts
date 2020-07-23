@@ -15,10 +15,7 @@ import sys
 import boto3
 import botocore
 import collections
-import ipcalc
 import logging
-import json
-from StringIO import StringIO
 import myawscommon
 from myawscommon import UsageError
 import re
@@ -38,7 +35,7 @@ _TAG_VALUE_REGEX = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9+\- =._:/@]{0,255}$')
 
 def check_security_group_name(sg_name):
     if len(sg_name) > _SG_DESC_LEN_MAX:
-        raise UsageError('security group name is invalid; must be no more than ' + _SG_NAME_LEN_MAX + ' characters')
+        raise UsageError(f"security group name is invalid; must be no more than {_SG_NAME_LEN_MAX} characters")
     return sg_name
 
 def check_tag(key_value_tuple):
@@ -57,12 +54,14 @@ def construct_description(args, vpc_id, region):
 class SessionProductCache(dict):
 
     def __init__(self, factory):
+        super().__init__()
         self.factory = factory
 
     def __missing__(self, key):
         ec2 = self.factory(key)
         self[key] = ec2
         return self[key]
+
 
 def main(argv):
     from argparse import ArgumentParser
@@ -100,7 +99,7 @@ multiple VPCs with common name and tags.""")
         if len(vpcs) > 0:
             vpcs_by_region[region] = vpcs
         if args.verbose:
-            print "%d VPCs in %s%s%s" % (len(vpcs), region, ': ' if (len(vpcs) > 0) else '', '. '.join([vpc['VpcId'] for vpc in vpcs]))
+            print("%d VPCs in %s%s%s" % (len(vpcs), region, ': ' if (len(vpcs) > 0) else '', '. '.join([vpc['VpcId'] for vpc in vpcs])))
     _log.debug("%d VPCs across %d regions", len(region_by_vpc_id), len(vpcs_by_region))
     for vpc_id in args.vpcs:
         if vpc_id not in region_by_vpc_id:
@@ -123,7 +122,7 @@ multiple VPCs with common name and tags.""")
                 group_id = "sg-%012x" % random.getrandbits(48)
             else:
                 raise
-        print group_id, "%screated" % "(dry-run) " if args.dry_run else '',
+        print(group_id, "%screated" % "(dry-run) " if args.dry_run else '', end="")
         if len(tags) > 0:
             security_group = ec2_resource.SecurityGroup(group_id)
             try:
@@ -133,14 +132,15 @@ multiple VPCs with common name and tags.""")
                     response = [ec2_resource.Tag(group_id, key, value) for key, value in tags]
                 else:
                     raise
-            print 'with', len(response), 'tag(s)',
+            print('with', len(response), 'tag(s)', end="")
             _log.debug("created tags: %s", response)
-        print
+        print()
     return 0
+
 
 if __name__ == '__main__':
     try:
         sys.exit(main(sys.argv))
     except UsageError as e:
-        print >> sys.stderr, e
+        print(e, file=sys.stderr)
         sys.exit(ERR_USAGE)
