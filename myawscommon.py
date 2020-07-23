@@ -10,7 +10,7 @@
 
 import logging, logging.config
 import fnmatch
-
+from typing import Iterable, Set
 
 _log = logging.getLogger(__name__)
 
@@ -73,17 +73,29 @@ def add_credentials_options(parser):
 def add_region_option(parser):
     parser.add_argument("--regions", nargs="+", help="restrict regions", metavar='REGION', default=['*'])
 
-def filter_regions(session, regions):
-    """Filters the set of available regions using the patterns specified
-    by the given regions patterns list. Patterns must be literals or
-    shell-style wildcards. If the regions argument is None, all 
-    available regions are returned."""
-    available_regions = session.get_available_regions('ec2')
-    matching_regions = []
-    for pattern in regions:
-        for matching in fnmatch.filter(available_regions, pattern):
-            if matching not in matching_regions:
-                matching_regions.append(matching)
-    if len(matching_regions) == 0:
+def filter_regions(session, regions: Iterable[str], service='ec2', known_enabled_region_name='us-east-1') -> Set[str]:
+    """Filters the set of enabled regions using the patterns specified
+    by the given regions patterns list and returns a set of region names.
+    Patterns must be literals or shell-style wildcards. If the regions
+    argument is None, all names of enabled regions are returned."""
+    if service != 'ec2':
+        raise NotImplementedError("this is not yet implemented for non-EC2 services")
+    # This is weird, but we have to use a known-enabled region to create an EC2 client that can fetch all of the region descriptions
+    ec2_client = session.client('ec2', region_name=known_enabled_region_name)
+    regions_rsp = ec2_client.describe_regions()
+    enabled_region_names = set()
+    # ok_opt_in_statuses = {'opt-in-not-required', 'opted-in'}
+    for region in regions_rsp['Regions']:
+        if region['OptInStatus'] in {'opt-in-not-required', 'opted-in'}:
+            enabled_region_names.add(region['RegionName'])
+    matching_region_names = set()
+    if regions is None:
+        matching_region_names.update(enabled_region_names)
+    else:
+        for pattern in regions:
+            for matching in fnmatch.filter(enabled_region_names, pattern):
+                matching_region_names.add(matching)
+    # TODO this should be checked by the caller instead
+    if len(matching_region_names) == 0:
         raise UsageError("no available regions match patterns in %s" % regions)
-    return matching_regions
+    return matching_region_names

@@ -167,7 +167,7 @@ def is_internal_ip(ip):
 def check_instances_in_region(session, config, region, states, verbose=False):
     ec2 = session.resource('ec2', region_name=region)
     instances = list(ec2.instances.filter(Filters=[{'Name': 'instance-state-name', 'Values': states}]))
-    _log.debug("%d instances with state in %s in region %s", len(instances), states, region)
+    _log.debug("%d instances in region %s with state one of %s", len(instances), region, states)
     secgroups_by_id = {}
     for instance in instances:
         for sg in instance.security_groups:
