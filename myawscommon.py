@@ -11,12 +11,16 @@
 import logging, logging.config
 import fnmatch
 
+
+_log = logging.getLogger(__name__)
+
+
 class UsageError(ValueError):
     pass
 
 def client_error_has_code(e, code_or_codes):
     codes = code_or_codes
-    if isinstance(code_or_codes, basestring):
+    if isinstance(code_or_codes, str):
         codes = (code_or_codes,)
     error_code = e.response['Error']['Code']
     return error_code in codes
@@ -81,5 +85,5 @@ def filter_regions(session, regions):
             if matching not in matching_regions:
                 matching_regions.append(matching)
     if len(matching_regions) == 0:
-        parser.error("no available regions match patterns in %s" % regions)
+        raise UsageError("no available regions match patterns in %s" % regions)
     return matching_regions
